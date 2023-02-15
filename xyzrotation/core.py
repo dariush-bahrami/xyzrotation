@@ -1,3 +1,9 @@
+""" Core functions for XYZ Rotation Augmentation.
+
+Project Repository: https://github.com/dariush-bahrami/xyzrotation
+"""
+
+
 from typing import NamedTuple, Optional, Tuple
 
 import cv2 as cv
@@ -9,14 +15,21 @@ class ImageSize(NamedTuple):
     width: int
 
 
-def transform_points(
-    transform_matrix: np.ndarray,
-    points: np.ndarray,
-) -> np.ndarray:
+def transform_points(points: np.ndarray, transform_matrix: np.ndarray) -> np.ndarray:
+    """Transform points using a given transformation matrix.
+
+    Args:
+        transform_matrix (np.ndarray): 3x3 transformation matrix.
+        points (np.ndarray): Nx2 array of points.
+
+    Returns:
+        np.ndarray: Nx2 array of transformed points.
+    """
     points = np.concatenate((points, np.ones((points.shape[0], 1))), axis=1).T
     points = transform_matrix.dot(points)
     points = np.true_divide(points, points[-1])
-    return points[:2].T
+    points = points[:2].T
+    return points
 
 
 def get_transform_matrix(
@@ -42,7 +55,7 @@ def get_transform_matrix(
             calculated automaticly. Defaults to None.
 
     Returns:
-        Tuple[np.ndarray, ImageSize]: A tuple of transformation matrix and warped image
+        Tuple[np.ndarray, ImageSize]: A tuple of transformation matrix and new image
             size.
     """
     x_rotation, y_rotation, z_rotation = map(
@@ -128,44 +141,44 @@ def get_transform_matrix(
         ],
         dtype=np.float32,
     )
-    corners = transform_points(transform_matrix, corners)
+
+    # Fix translation issue
+    corners = transform_points(corners, transform_matrix)
     xmin, ymin = map(int, corners.min(axis=0))
     xmax, ymax = map(int, corners.max(axis=0))
-    warp_h = ymax - ymin
-    warp_w = xmax - xmin
+    new_h = ymax - ymin
+    new_w = xmax - xmin
 
     translate = np.eye(3)
 
     # Convert XY translations to absolute coordinates
-    x_translate *= warp_w
-    y_translate *= warp_h
+    x_translate *= new_w
+    y_translate *= new_h
     translate[0, 2] = -xmin + x_translate
     translate[1, 2] = -ymin + y_translate
     transform_matrix = translate @ transform_matrix
 
-    return transform_matrix, ImageSize(warp_h, warp_w)
+    return transform_matrix, ImageSize(new_h, new_w)
 
 
 def transform_image(
     image: np.ndarray,
-    x_rotation: float,
-    y_rotation: float,
-    z_rotation: float,
-    x_translate: float,
-    y_translate: float,
-    focal_length: Optional[float] = None,
+    transform_matrix: np.ndarray,
+    after_transform_image_size: ImageSize,
     cv2_warp_perspective_kwargs: Optional[dict] = None,
-):
-    transform_matrix, (warp_h, warp_w) = get_transform_matrix(
-        image.shape[:2],
-        x_rotation,
-        y_rotation,
-        z_rotation,
-        x_translate,
-        y_translate,
-        focal_length=focal_length,
-    )
+) -> np.ndarray:
+    """Transform an image using a given transformation matrix.
 
+    Args:
+        image (np.ndarray): Image to be transformed.
+        transform_matrix (np.ndarray): Transformation matrix.
+        after_transform_image_size (ImageSize): Size of the image after transformation.
+        cv2_warp_perspective_kwargs (Optional[dict], optional): Additional arguments
+            to be passed to cv2.warpPerspective. Defaults to None.
+
+    Returns:
+        np.ndarray: Transformed image.
+    """
     kwargs = dict(
         borderMode=cv.BORDER_CONSTANT,
         borderValue=[0, 0, 0],
@@ -173,10 +186,50 @@ def transform_image(
     )
     if cv2_warp_perspective_kwargs is not None:
         kwargs.update(cv2_warp_perspective_kwargs)
+    new_h, new_w = after_transform_image_size
     warp_result = cv.warpPerspective(
         image,
         transform_matrix,
-        (warp_w, warp_h),
+        (new_w, new_h),
         **kwargs,
     )
     return warp_result
+
+
+def rotate_image(
+    image: np.ndarray,
+    x_rotation: float,
+    y_rotation: float,
+    z_rotation: float,
+    focal_length: Optional[float] = None,
+    cv2_warp_perspective_kwargs: Optional[dict] = None,
+):
+    """Rotate an image.
+
+    Args:
+        image (np.ndarray): Image to be rotated.
+        x_rotation (float): Rotation angle around the x-axis.
+        y_rotation (float): Rotation angle around the y-axis.
+        z_rotation (float): Rotation angle around the z-axis.
+        focal_length (Optional[float], optional): Focal length. Defaults to None.
+        cv2_warp_perspective_kwargs (Optional[dict], optional): Additional arguments
+            to be passed to cv2.warpPerspective. Defaults to None.
+
+    Returns:
+        np.ndarray: Rotated image.
+    """
+    transform_matrix, (new_h, new_w) = get_transform_matrix(
+        image.shape[:2],
+        x_rotation,
+        y_rotation,
+        z_rotation,
+        x_translate=0,
+        y_translate=0,
+        focal_length=focal_length,
+    )
+    return transform_image(
+        image,
+        transform_matrix,
+        ImageSize(new_h, new_w),
+        cv2_warp_perspective_kwargs=cv2_warp_perspective_kwargs,
+    )
